@@ -2539,6 +2539,28 @@ details[open] .pasti-passati-arrow { transform: rotate(90deg); }
   padding: 0.48rem 0.8rem; border-radius: 9px; outline: none; box-sizing: border-box;
 }
 
+/* Tariffa rows */
+.tariffa-row {
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+  padding: 0.7rem 0.9rem; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--surface3);
+}
+.tariffa-role-label {
+  display: flex; align-items: center;
+  font-size: 0.88rem; font-weight: 700;
+  min-width: 130px; flex-shrink: 0;
+}
+.tariffa-inputs { display: flex; gap: 1.5rem; flex-wrap: wrap; flex: 1; }
+.tariffa-field label {
+  display: block; font-size: 0.62rem; font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--dimtext); margin-bottom: 0.25rem;
+}
+@media (max-width: 640px) {
+  .tariffa-row { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
+  .tariffa-role-label { min-width: 0; }
+}
+
 /* Role row */
 .role-row {
   display: flex; align-items: center; gap: 0.6rem;
@@ -5089,7 +5111,23 @@ function getMyTariffa(){
   if(!currentUser) return 0;
   var key='msrls_tariffa_'+currentUser.id;
   var v=localStorage.getItem(key);
-  return v?parseFloat(v)||0:0;
+  if(v!=null) return parseFloat(v)||0;
+  // Fall back to admin-set tariffa for this role
+  var role = currentUser.role||'dancer';
+  var cfg = state.adminConfig && state.adminConfig.tariffe && state.adminConfig.tariffe[role];
+  if(cfg != null){
+    var t = typeof cfg === 'object' ? cfg.tariffa : cfg;
+    if(t != null) return parseFloat(t)||0;
+  }
+  return 0;
+}
+
+function getRoleUsa70(role){
+  // Returns whether replicas after the first are counted at 70% for this role
+  var cfg = state.adminConfig && state.adminConfig.tariffe && state.adminConfig.tariffe[role];
+  if(cfg == null) return true; // default: yes 70%
+  if(typeof cfg === 'object') return cfg.usa70 !== false;
+  return true; // old number format defaults to true
 }
 function setMyTariffa(val){
   if(!currentUser) return;
@@ -5121,8 +5159,9 @@ function getMyPresenze(){
       if(userPresent){
         var n=datesOnDay.length;
         count+=n;
-        fullPay+=1;            // first replica: 100%
-        reducedPay+=(n-1)*0.7; // subsequent: 70%
+        var usa70 = getRoleUsa70(currentUser.role||'dancer');
+        fullPay+=1;
+        reducedPay+=usa70 ? (n-1)*0.7 : (n-1)*1; // 70% or 100% per role config
       }
     });
     result[sid]={count:count,fullPay:fullPay,reducedPay:reducedPay,effectiveDates:fullPay+reducedPay};
@@ -5601,6 +5640,21 @@ function renderFinanze(){
     +'</div>'
     +'</div>'
     +'<div class="finanze-tariffa-hint">Prima replica: 100% &bull; Repliche successive stesso giorno: 70%</div>'
+    +(function(){
+      var key='msrls_tariffa_'+currentUser.id;
+      var hasOwn = localStorage.getItem(key) != null;
+      var role = currentUser.role||'dancer';
+      var cfg = state.adminConfig && state.adminConfig.tariffe && state.adminConfig.tariffe[role];
+      var adminVal = cfg != null ? (typeof cfg==='object' ? cfg.tariffa : cfg) : null;
+      var usa70hint = cfg != null && typeof cfg==='object' && cfg.usa70===false ? ' (repliche al 100%)' : ' (repliche al 70%)';
+      if(!hasOwn && adminVal != null && parseFloat(adminVal) > 0){
+        return '<div style="font-size:0.72rem;color:#34d399;margin-top:0.3rem">Tariffa suggerita per il tuo ruolo: <strong>'+formatEuro(parseFloat(adminVal))+'</strong>'+usa70hint+' &mdash; <span style="cursor:pointer;text-decoration:underline;color:var(--calendar)" onclick="setMyTariffa('+parseFloat(adminVal)+');renderFinanze()">Usa questo valore</span></div>';
+      }
+      if(hasOwn && adminVal != null && parseFloat(adminVal) > 0 && Math.abs(tariffa - parseFloat(adminVal)) > 0.01){
+        return '<div style="font-size:0.72rem;color:var(--dimtext);margin-top:0.3rem">Suggerita dall\'admin per il tuo ruolo: <strong>'+formatEuro(parseFloat(adminVal))+'</strong>'+usa70hint+'</div>';
+      }
+      return '';
+    })()
     +'</div>';
 
   var totaleBox='<div class="finanze-totale-box">'
@@ -5649,7 +5703,9 @@ function renderFinanzePerformer(wrap){
   var showsGrid='<div class="finanze-shows-grid">';
   PERF_SHOWS.forEach(function(sid){
     var show=SHOWS[sid];
-    var tariffa=PERFORMER_TARIFFE[sid]||0;
+    // Use admin-set tariffa if available, fall back to PERFORMER_TARIFFE constant
+    var perfAdminCfg = state.adminConfig && state.adminConfig.tariffe && state.adminConfig.tariffe['performer'];
+    var tariffa = (perfAdminCfg && perfAdminCfg[sid] != null) ? parseFloat(perfAdminCfg[sid]) : (PERFORMER_TARIFFE[sid]||0);
     // Count confirmed dates for this show
     var allDates=state.date[sid]||[];
     var count=0;
@@ -5681,12 +5737,15 @@ function renderFinanzePerformer(wrap){
     +'<div style="font-size:2.5rem;opacity:0.3">&#127926;</div>'
     +'</div>';
 
+  var perfAdminCfg2 = state.adminConfig && state.adminConfig.tariffe && state.adminConfig.tariffe['performer'];
+  function getPerfT(sid){ return (perfAdminCfg2 && perfAdminCfg2[sid]!=null) ? parseFloat(perfAdminCfg2[sid]) : (PERFORMER_TARIFFE[sid]||0); }
   var infoBox='<div class="finanze-tariffa-box" style="background:rgba(78,201,240,0.06);border-color:rgba(78,201,240,0.3)">'
     +'<div class="finanze-tariffa-label" style="color:#4ec9f0">Tariffe Performer</div>'
     +'<div style="font-size:0.82rem;color:var(--text);line-height:1.8">'
-    +'K-Pop: <strong>'+formatEuro(280)+'</strong> / replica &bull; '
-    +'I Love \'80: <strong>'+formatEuro(300)+'</strong> / replica &bull; '
-    +'My Name Is Michael: <strong>'+formatEuro(1400)+'</strong> / replica'
+    +Object.keys(SHOWS).filter(function(sid){return PERFORMER_TARIFFE[sid]!=null;}).map(function(sid){
+      return esc(SHOWS[sid].label)+': <strong>'+formatEuro(getPerfT(sid))+'</strong> / data';
+    }).join(' &bull; ')
+    +(perfAdminCfg2?'<div style="font-size:0.65rem;color:#34d399;margin-top:0.3rem">Tariffe personalizzate dall\'admin</div>':'')
     +'</div>'
     +'</div>';
 
@@ -6947,7 +7006,8 @@ function renderCachetModal(){
   if(!body) return;
 
   var performer=isPerformer();
-  var fixedTariffa=PERFORMER_TARIFFE[sid]||0;
+  var perfAdminCfgModal = state.adminConfig && state.adminConfig.tariffe && state.adminConfig.tariffe['performer'];
+  var fixedTariffa = (perfAdminCfgModal && perfAdminCfgModal[sid]!=null) ? parseFloat(perfAdminCfgModal[sid]) : (PERFORMER_TARIFFE[sid]||0);
   var tariffa=performer?fixedTariffa:getMyTariffa();
 
   var allDates=state.date[sid]||[];
@@ -7642,6 +7702,124 @@ function savePasto(){
   toast(id ? 'Pasto aggiornato' : 'Pasto creato');
 }
 
+function renderTariffePanel(){
+  var wrap = document.getElementById('fpanel-tariffe');
+  if(!wrap) return;
+  var roles = getCustomRoles();
+  var tariffe = (state.adminConfig && state.adminConfig.tariffe) || {};
+
+  var rowsHtml = roles.map(function(r){
+    var cfg = tariffe[r.id] != null ? tariffe[r.id] : {};
+
+    // PERFORMER: tariffe per spettacolo
+    if(r.id === 'performer'){
+      var perfCfg = (typeof cfg === 'object' && (cfg.kpop!=null||cfg.michael!=null||cfg.i80!=null||cfg.freddie!=null)) ? cfg : {};
+      var showFields = Object.keys(SHOWS).map(function(sid){
+        var show = SHOWS[sid];
+        var defVal = PERFORMER_TARIFFE[sid] != null ? PERFORMER_TARIFFE[sid] : 0;
+        var saved  = perfCfg[sid] != null ? perfCfg[sid] : defVal;
+        return '<div class="tariffa-field">'
+          +'<label style="color:'+show.color+'">'+esc(show.label)+'</label>'
+          +'<div style="display:flex;align-items:center;gap:0.3rem">'
+          +'<span style="color:var(--dimtext);font-size:0.8rem">\u20ac</span>'
+          +'<input type="number" class="fun-input" min="0" step="1" placeholder="'+defVal+'" value="'+saved+'" id="tariffa-perf-'+sid+'" style="max-width:110px">'
+          +'<span style="font-size:0.62rem;color:var(--dimtext)">/ data</span>'
+          +'</div></div>';
+      }).join('');
+      return '<div class="tariffa-row tariffa-row-performer" id="trow-'+r.id+'">'
+        +'<div class="tariffa-role-label" style="color:'+r.color+';align-self:flex-start">'
+        +'<span style="background:'+r.color+';width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:0.4rem;flex-shrink:0"></span>'
+        +esc(r.label)
+        +'</div>'
+        +'<div class="tariffa-inputs" style="flex-wrap:wrap;gap:0.8rem 1.4rem">'+showFields+'</div>'
+        +'</div>';
+    }
+
+    // ALTRI RUOLI
+    var val   = typeof cfg === 'object' ? (cfg.tariffa != null ? cfg.tariffa : '') : (cfg !== '' ? cfg : '');
+    var usa70 = typeof cfg === 'object' ? (cfg.usa70 !== false) : true;
+    var val70 = val !== '' && !isNaN(parseFloat(val)) ? Math.round(parseFloat(val)*0.7*100)/100 : '';
+    return '<div class="tariffa-row" id="trow-'+r.id+'">'
+      +'<div class="tariffa-role-label" style="color:'+r.color+'">'
+      +'<span style="background:'+r.color+';width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:0.4rem;flex-shrink:0"></span>'
+      +esc(r.label)
+      +'</div>'
+      +'<div class="tariffa-inputs">'
+      +'<div class="tariffa-field"><label>Prima replica</label>'
+      +'<div style="display:flex;align-items:center;gap:0.3rem">'
+      +'<span style="color:var(--dimtext);font-size:0.8rem">\u20ac</span>'
+      +'<input type="number" class="fun-input" min="0" step="1" placeholder="0" value="'+esc(String(val))+'" id="tariffa-'+r.id+'"'
+      +' oninput="updateTariffa70(\''+r.id+'\',this.value)" style="max-width:100px">'
+      +'</div></div>'
+      +'<div class="tariffa-field"><label>Repliche successive</label>'
+      +'<div style="display:flex;align-items:center;gap:0.55rem;flex-wrap:wrap">'
+      +'<label style="cursor:pointer;display:flex;align-items:center;gap:0.35rem;font-size:0.78rem;color:'+(usa70?'#34d399':'var(--dimtext)')+'" id="t70lbl-'+r.id+'">'
+      +'<input type="checkbox" id="usa70-'+r.id+'" '+(usa70?'checked':'')+' style="accent-color:#34d399;width:16px;height:16px" onchange="toggleUsa70(\''+r.id+'\',this.checked)">'
+      +(usa70?'70% attivo':'Disabilitato')
+      +'</label>'
+      +'<span id="tariffa70-'+r.id+'" style="font-family:\'JetBrains Mono\',monospace;font-size:0.82rem;color:'+(usa70?'var(--dimtext)':'rgba(248,113,113,0.6)')+'">'
+      +(usa70 ? (val70!==''?'\u20ac'+val70:'\u20ac\u2014') : '100%')
+      +'</span>'
+      +'</div></div>'
+      +'</div></div>';
+  }).join('');
+
+  wrap.innerHTML = '<div class="fun-section">'
+    +'<div class="fun-section-title">Tariffe per ruolo (Cachet)</div>'
+    +'<div style="font-size:0.75rem;color:var(--dimtext);margin-bottom:1rem;line-height:1.5">'
+    +'Tariffe suggerite per ogni ruolo. Per i <strong style="color:#4ec9f0">Performer</strong> la tariffa &egrave; fissa per spettacolo. Per gli altri il toggle regola le repliche successive (70% o 100%).'
+    +'</div>'
+    +'<div style="display:flex;flex-direction:column;gap:0.7rem">'+rowsHtml+'</div>'
+    +'<button class="btn btn-accent" style="--accent:#34d399;margin-top:1rem" onclick="saveTariffe()">Salva tariffe</button>'
+    +'</div>';
+}
+
+function toggleUsa70(roleId, checked){
+  var lbl = document.getElementById('t70lbl-'+roleId);
+  var val70el = document.getElementById('tariffa70-'+roleId);
+  var inp = document.getElementById('tariffa-'+roleId);
+  var val = inp ? parseFloat(inp.value) : NaN;
+  var cb = document.getElementById('usa70-'+roleId);
+  if(lbl && cb){ lbl.innerHTML=''; lbl.appendChild(cb); lbl.appendChild(document.createTextNode(checked?' 70% attivo':' Disabilitato')); lbl.style.color=checked?'#34d399':'var(--dimtext)'; }
+  if(val70el){
+    if(checked){ val70el.style.color='var(--dimtext)'; val70el.textContent = (!isNaN(val)&&val>0) ? '\u20ac'+Math.round(val*0.7*100)/100 : '\u20ac\u2014'; }
+    else { val70el.style.color='rgba(248,113,113,0.6)'; val70el.textContent = '100%'; }
+  }
+}
+
+function updateTariffa70(roleId, val){
+  var n = parseFloat(val);
+  var el = document.getElementById('tariffa70-'+roleId);
+  var cb = document.getElementById('usa70-'+roleId);
+  var usa70 = cb ? cb.checked : true;
+  if(el){ el.textContent = usa70 ? ((!isNaN(n)&&n>0) ? '\u20ac'+(Math.round(n*0.7*100)/100) : '\u20ac\u2014') : '100%'; }
+}
+
+function saveTariffe(){
+  if(!state.adminConfig) state.adminConfig = {};
+  if(!state.adminConfig.tariffe) state.adminConfig.tariffe = {};
+  var roles = getCustomRoles();
+  roles.forEach(function(r){
+    if(r.id === 'performer'){
+      var perfObj = {};
+      Object.keys(SHOWS).forEach(function(sid){
+        var inp = document.getElementById('tariffa-perf-'+sid);
+        if(inp){ var v=parseFloat(inp.value); if(!isNaN(v)&&v>=0) perfObj[sid]=v; }
+      });
+      if(Object.keys(perfObj).length) state.adminConfig.tariffe['performer'] = perfObj;
+      return;
+    }
+    var inp  = document.getElementById('tariffa-'+r.id);
+    var cb70 = document.getElementById('usa70-'+r.id);
+    var v    = inp ? parseFloat(inp.value) : NaN;
+    var usa70 = cb70 ? cb70.checked : true;
+    if(!isNaN(v) && v >= 0){ state.adminConfig.tariffe[r.id] = { tariffa: v, usa70: usa70 }; }
+    else { delete state.adminConfig.tariffe[r.id]; }
+  });
+  save(); scheduleSync(true);
+  toast('Tariffe salvate');
+}
+
 // ══════ SUGGERIMENTI ══════
 function getSuggerimentiUnread(){
   if(!isTrueAdmin()) return 0;
@@ -7767,7 +7945,7 @@ function renderSuggerimentiView(){
 var _funzioniTab = 'ticker';
 function switchFunzioniTab(tab){
   _funzioniTab = tab;
-  ['ticker','contenuti','ruoli','sezioni'].forEach(function(t){
+  ['ticker','contenuti','ruoli','sezioni','tariffe'].forEach(function(t){
     var btn = document.getElementById('ftab-'+t);
     var panel = document.getElementById('fpanel-'+t);
     if(btn) btn.classList.toggle('active', t===tab);
@@ -7777,27 +7955,29 @@ function switchFunzioniTab(tab){
   if(tab==='sezioni') renderSezioniPanel();
   if(tab==='contenuti') renderContenutiPanel();
   if(tab==='ticker') renderTickerAdminPanel();
+  if(tab==='tariffe') renderTariffePanel();
 }
 
 function renderFunzioniAdmin(){
   var wrap = document.getElementById('adminPanelFunzioni');
   if(!wrap) return;
-  // Build the sub-tabs
   wrap.innerHTML = '<div class="admin-tabs" style="margin-bottom:1rem">'
     +'<button class="admin-tab'+((_funzioniTab==='ticker')?' active':'')+'" id="ftab-ticker" onclick="switchFunzioniTab(\'ticker\')">Ticker</button>'
     +'<button class="admin-tab'+((_funzioniTab==='contenuti')?' active':'')+'" id="ftab-contenuti" onclick="switchFunzioniTab(\'contenuti\')">Contenuti</button>'
     +'<button class="admin-tab'+((_funzioniTab==='ruoli')?' active':'')+'" id="ftab-ruoli" onclick="switchFunzioniTab(\'ruoli\')">Ruoli</button>'
     +'<button class="admin-tab'+((_funzioniTab==='sezioni')?' active':'')+'" id="ftab-sezioni" onclick="switchFunzioniTab(\'sezioni\')">Sezioni</button>'
+    +'<button class="admin-tab'+((_funzioniTab==='tariffe')?' active':'')+'" id="ftab-tariffe" onclick="switchFunzioniTab(\'tariffe\')">Tariffe</button>'
     +'</div>'
     +'<div id="fpanel-ticker" style="'+((_funzioniTab!=='ticker')?'display:none':'')+'"></div>'
     +'<div id="fpanel-contenuti" style="'+((_funzioniTab!=='contenuti')?'display:none':'')+'"></div>'
     +'<div id="fpanel-ruoli" style="'+((_funzioniTab!=='ruoli')?'display:none':'')+'"></div>'
-    +'<div id="fpanel-sezioni" style="'+((_funzioniTab!=='sezioni')?'display:none':'')+'"></div>';
-  // Render active tab
+    +'<div id="fpanel-sezioni" style="'+((_funzioniTab!=='sezioni')?'display:none':'')+'"></div>'
+    +'<div id="fpanel-tariffe" style="'+((_funzioniTab!=='tariffe')?'display:none':'')+'"></div>';
   if(_funzioniTab==='ticker') renderTickerAdminPanel();
   else if(_funzioniTab==='contenuti') renderContenutiPanel();
   else if(_funzioniTab==='ruoli') renderRuoliPanel();
   else if(_funzioniTab==='sezioni') renderSezioniPanel();
+  else if(_funzioniTab==='tariffe') renderTariffePanel();
 }
 
 function renderTickerAdminPanel(){
@@ -8072,7 +8252,8 @@ function getUserPresenze(user){
       });
       if(userPresent){
         var n=datesOnDay.length;
-        count+=n; fullPay+=1; reducedPay+=(n-1)*0.7;
+        var usa70 = getRoleUsa70(user.role||'dancer');
+        count+=n; fullPay+=1; reducedPay+=usa70 ? (n-1)*0.7 : (n-1)*1;
       }
     });
     result[sid]={count:count,fullPay:fullPay,reducedPay:reducedPay,effectiveDates:fullPay+reducedPay};
@@ -8108,7 +8289,8 @@ function getUserEarnings(user){
   if(role==='performer'){
     var PERF_SHOWS=['kpop','michael','i80'];
     PERF_SHOWS.forEach(function(sid){
-      var tariffa=PERFORMER_TARIFFE[sid]||0;
+      var perfAdminCfgStats = state.adminConfig && state.adminConfig.tariffe && state.adminConfig.tariffe['performer'];
+      var tariffa = (perfAdminCfgStats && perfAdminCfgStats[sid]!=null) ? parseFloat(perfAdminCfgStats[sid]) : (PERFORMER_TARIFFE[sid]||0);
       var allDates=state.date[sid]||[];
       var count=0;
       allDates.forEach(function(d){
